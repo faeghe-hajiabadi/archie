@@ -60,7 +60,7 @@ export default function Home({ session }: { session: Session }) {
       <div className="max-w-2xl mx-auto py-10 text-center">
         <h1 className="text-3xl font-bold mb-2">Welcome to Archie!</h1>
         <p className="text-gray-500 mb-8">Let's start by creating a profile for your pet.</p>
-        <AddPetForm userId={session.user.id} onComplete={fetchPet} />
+        <AddPetForm userId={session.user.id} accessToken={session.access_token} onComplete={fetchPet} />
       </div>
     );
   }
