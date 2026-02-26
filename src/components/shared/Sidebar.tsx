@@ -13,14 +13,27 @@ const menuItems = [
   { name: 'Lost and Found', icon: Search, path: '/lost-found' },
 ];
 
-export default function Sidebar({ className }: { className?: string }) {
+const LOGOUT_TIMEOUT_MS = 5000;
+
+export default function Sidebar({ className, onLogout }: { className?: string; onLogout?: () => void }) {
   const location = useLocation();
   const [loggingOut, setLoggingOut] = useState(false);
 
   const handleLogout = async () => {
     setLoggingOut(true);
-    await supabase.auth.signOut();
-    setLoggingOut(false);
+    try {
+      await Promise.race([
+        supabase.auth.signOut(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Logout timed out')), LOGOUT_TIMEOUT_MS)
+        ),
+      ]);
+    } catch {
+      // Timeout or error: clear session so user sees Auth screen
+      onLogout?.();
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   return (

@@ -75,7 +75,7 @@ function App() {
   }
 
   return (
-    <Layout>
+    <Layout onLogout={() => setSession(null)}>
       <Routes>
         {/* Pass session to Home so it can check for pets */}
         <Route path="/" element={<Home session={session} />} />

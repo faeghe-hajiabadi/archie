@@ -1,15 +1,22 @@
 import { useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Label } from "../../ui/label";
 
-export default function AddPetForm({ userId, accessToken, onComplete }: { userId: string; accessToken: string; onComplete: () => void | Promise<void> }) {
+function isSessionExpired(status: number, message: string): boolean {
+  return status === 401 || /JWT expired|expired|invalid.*token/i.test(message);
+}
+
+export default function AddPetForm({ userId, userEmail, accessToken, onComplete }: { userId: string; userEmail: string; accessToken: string; onComplete: () => void | Promise<void> }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [species, setSpecies] = useState('Dog');
   const [breed, setBreed] = useState('');
+  const [weight, setWeight] = useState('');
+  const [weightUnit, setWeightUnit] = useState<'kg' | 'lb'>('kg');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,6 +36,29 @@ export default function AddPetForm({ userId, accessToken, onComplete }: { userId
     setError(null);
 
     try {
+      // Ensure profile row exists so pets.owner_id FK is satisfied (RLS must allow this)
+      const profileRes = await fetch(`${url}/rest/v1/profiles`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${accessToken}`,
+          Prefer: 'resolution=merge-duplicates',
+        },
+        body: JSON.stringify({ id: userId, full_name: userEmail || 'User' }),
+      });
+      if (!profileRes.ok) {
+        const errBody = await profileRes.json().catch(() => null);
+        const msg = (errBody?.message ?? errBody?.error) || `Profile setup failed (${profileRes.status})`;
+        if (isSessionExpired(profileRes.status, msg)) {
+          await supabase.auth.refreshSession();
+          setError("Your session expired. We've refreshed it — please try Add Pet again.");
+        } else {
+          setError(msg);
+        }
+        return;
+      }
+
       const response = await fetch(`${url}/rest/v1/pets`, {
         method: 'POST',
         headers: {
@@ -43,7 +73,8 @@ export default function AddPetForm({ userId, accessToken, onComplete }: { userId
             name,
             species,
             breed,
-            weight_unit: 'kg',
+            ...(weight.trim() !== '' && !Number.isNaN(Number(weight)) ? { weight: Number(weight) } : {}),
+            weight_unit: weightUnit,
           },
         ]),
       });
@@ -53,8 +84,17 @@ export default function AddPetForm({ userId, accessToken, onComplete }: { userId
         const message =
           (errorBody && (errorBody.message || errorBody.error)) ||
           `Request failed with status ${response.status}`;
+        if (isSessionExpired(response.status, message)) {
+          await supabase.auth.refreshSession();
+          setError("Your session expired. We've refreshed it — please try Add Pet again.");
+        } else if (message.includes('pets_owner_id_fkey')) {
+          setError(
+            "Your profile couldn't be created. In Supabase SQL Editor run the policy in supabase/profiles-rls.sql, then sign out and sign back in."
+          );
+        } else {
+          setError(message);
+        }
         console.error('Supabase REST error:', message, errorBody);
-        setError(message);
         return;
       }
 
@@ -101,6 +141,28 @@ export default function AddPetForm({ userId, accessToken, onComplete }: { userId
               value={breed} 
               onChange={(e) => setBreed(e.target.value)} 
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="weight">Weight</Label>
+            <div className="flex gap-2">
+              <Input
+                id="weight"
+                type="number"
+                min="0"
+                step="0.1"
+                placeholder="e.g. 12.5"
+                value={weight}
+                onChange={(e) => setWeight(e.target.value)}
+              />
+              <select
+                value={weightUnit}
+                onChange={(e) => setWeightUnit(e.target.value as 'kg' | 'lb')}
+                className="flex h-9 w-16 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+              >
+                <option value="kg">kg</option>
+                <option value="lb">lb</option>
+              </select>
+            </div>
           </div>
           {error && (
             <p className="text-sm text-red-600" role="alert">

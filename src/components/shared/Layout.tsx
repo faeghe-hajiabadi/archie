@@ -3,14 +3,15 @@ import Sidebar from './Sidebar.tsx'
 import Header from './Header.tsx'
 
 interface LayoutProps {
-    children: ReactNode
-  }
-  
-  export default function Layout({ children }: LayoutProps) {
-    return (
-      <div className="flex h-screen bg-slate-50">
-        {/* 1. Permanent Sidebar */}
-        <Sidebar className="hidden md:flex w-64 flex-col fixed inset-y-0" />
+  children: ReactNode
+  onLogout?: () => void
+}
+
+export default function Layout({ children, onLogout }: LayoutProps) {
+  return (
+    <div className="flex h-screen bg-slate-50">
+      {/* 1. Permanent Sidebar */}
+      <Sidebar className="hidden md:flex w-64 flex-col fixed inset-y-0" onLogout={onLogout} />
   
         {/* 2. Main Content Area */}
         <div className="flex-1 flex flex-col md:pl-64">
@@ -25,5 +26,5 @@ interface LayoutProps {
           </main>
         </div>
       </div>
-    )
-  }
+  )
+}
