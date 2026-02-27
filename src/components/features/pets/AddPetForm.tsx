@@ -90,15 +90,33 @@ export default function AddPetForm({
     setLoading(true);
     setError(null);
 
-    const url = import.meta.env.VITE_SUPABASE_URL;
-    const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    const url = import.meta.env.VITE_SUPABASE_URL?.trim();
+    const key = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+
+    if (!url || !key) {
+      setError('Missing Supabase config. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env.local');
+      setLoading(false);
+      return;
+    }
+    if (!accessToken?.trim()) {
+      setError('Not signed in. Please log out and log back in.');
+      setLoading(false);
+      return;
+    }
 
     try {
       let imageUrl: string | null = null;
 
-      // 1. Upload Image (Using converted JPEG if it was HEIC)
+      // 1. Upload Image (HEIC is already converted to JPEG; other formats keep original type)
       if (imageFile) {
-        const fileName = `${crypto.randomUUID()}.jpg`;
+        const isBlob = imageFile instanceof Blob && !(imageFile instanceof File);
+        const ext = isBlob
+          ? 'jpg'
+          : (imageFile as File).name.split('.').pop()?.toLowerCase() || 'jpg';
+        const contentType = isBlob
+          ? 'image/jpeg'
+          : (imageFile as File).type || 'image/jpeg';
+        const fileName = `${crypto.randomUUID()}.${ext}`;
         const filePath = `${userId}/${fileName}`;
 
         const uploadRes = await fetch(`${url}/storage/v1/object/pet-images/${filePath}`, {
@@ -106,7 +124,7 @@ export default function AddPetForm({
           headers: {
             Authorization: `Bearer ${accessToken}`,
             apikey: key,
-            'Content-Type': 'image/jpeg',
+            'Content-Type': contentType,
           },
           body: imageFile,
         });
@@ -116,8 +134,8 @@ export default function AddPetForm({
         }
       }
 
-      // 2. Ensure Profile exists
-      await fetch(`${url}/rest/v1/profiles`, {
+      // 2. Ensure Profile exists (required for pet foreign key)
+      const profileRes = await fetch(`${url}/rest/v1/profiles`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -127,6 +145,12 @@ export default function AddPetForm({
         },
         body: JSON.stringify({ id: userId, full_name: userEmail || 'User' }),
       });
+
+      if (!profileRes.ok) {
+        const errBody = await profileRes.json().catch(() => ({}));
+        const msg = (errBody as { message?: string }).message || `Profile failed (${profileRes.status})`;
+        throw new Error(msg);
+      }
 
       // 3. Insert Pet Record
       const petRes = await fetch(`${url}/rest/v1/pets`, {
