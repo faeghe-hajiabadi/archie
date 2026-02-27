@@ -2,9 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Link } from 'react-router-dom';
 import { Trash2, Plus } from 'lucide-react';
-import { supabase } from '@/lib/supabaseClient';
 import AddPetForm from '@/components/features/pets/AddPetForm';
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
@@ -66,14 +65,37 @@ export default function Home({ session }: { session: Session }) {
   const handleDeletePet = async () => {
     if (!petToDelete) return;
     setDeleting(true);
+    const url = import.meta.env.VITE_SUPABASE_URL;
+    const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    const token = session?.access_token;
+    if (!url?.trim() || !key?.trim() || !token?.trim()) {
+      setDeleting(false);
+      return;
+    }
+    const deleteUrl = `${url.replace(/\/$/, '')}/rest/v1/pets?id=eq.${encodeURIComponent(petToDelete.id)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
-      const { error } = await supabase.from('pets').delete().eq('id', petToDelete.id);
-      if (error) throw error;
+      const res = await fetch(deleteUrl, {
+        method: 'DELETE',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error((errBody as { message?: string }).message || `Delete failed: ${res.status}`);
+      }
       setPets((prev) => prev.filter((p) => p.id !== petToDelete.id));
       setPetToDelete(null);
     } catch (err) {
       console.error('Delete error:', err);
     } finally {
+      clearTimeout(timeoutId);
       setDeleting(false);
     }
   };
@@ -124,6 +146,7 @@ export default function Home({ session }: { session: Session }) {
             <PetCard 
               key={pet.id} 
               pet={pet} 
+              accessToken={session?.access_token ?? ''}
               onDelete={() => setPetToDelete({ id: pet.id, name: pet.name })} 
             />
           ))}
@@ -145,35 +168,83 @@ export default function Home({ session }: { session: Session }) {
   );
 }
 
-function PetCard({ pet, onDelete }: { pet: any; onDelete: () => void }) {
+function PetCard({ pet, accessToken, onDelete }: { pet: any; accessToken: string; onDelete: () => void }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [imgError, setImgError] = useState(false);
 
-  useEffect(() => {
-    async function getSecureUrl() {
-      if (!pet.image_url) return;
-      
-      // Extract the path if it's stored as a full URL
-      const path = pet.image_url.includes('pet-images/') 
-        ? pet.image_url.split('pet-images/').pop() 
-        : pet.image_url;
-
-      const { data, error } = await supabase.storage
-        .from('pet-images')
-        .createSignedUrl(path, 3600);
-
-      if (!error && data) setSignedUrl(data.signedUrl);
+  // Extract storage path from image_url (full URL or path-only)
+  const getPath = (): string | null => {
+    if (!pet.image_url) return null;
+    if (pet.image_url.startsWith('http')) {
+      if (pet.image_url.includes('pet-images/')) return pet.image_url.split('pet-images/').pop() ?? null;
+      return null;
     }
-    getSecureUrl();
-  }, [pet.image_url]);
+    return pet.image_url;
+  };
+
+  const path = getPath();
+  const baseUrl = (import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/$/, '');
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
+  const isFullUrl = pet.image_url?.startsWith('http');
+  const publicUrl =
+    isFullUrl
+      ? (pet.image_url?.includes('pet-irages') ? pet.image_url.replace(/pet-irages/g, 'pet-images') : pet.image_url)
+      : path && baseUrl
+        ? `${baseUrl}/storage/v1/object/public/pet-images/${path}`
+        : null;
+  // Prefer signed URL for private buckets; fall back to public URL (works for public buckets)
+  const imageSrc = signedUrl || publicUrl;
+
+  useEffect(() => {
+    const t = setTimeout(() => setImgError(false), 0);
+    return () => clearTimeout(t);
+  }, [pet.id, pet.image_url]);
+
+  // For private bucket: get signed URL via fetch (avoids hanging Supabase client)
+  useEffect(() => {
+    if (!path || !baseUrl || !key?.trim() || !accessToken?.trim()) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const signPath = `pet-images/${path.replace(/^\/+/, '')}`;
+    fetch(`${baseUrl}/storage/v1/object/sign/${signPath}`, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ expiresIn: 3600 }),
+      signal: controller.signal,
+    })
+      .then((res) => {
+        clearTimeout(timeoutId);
+        if (!res.ok) return res.json().then((body) => { throw new Error((body as { message?: string }).message || String(res.status)); });
+        return res.json();
+      })
+      .then((data: { signedURL?: string }) => {
+        if (cancelled || !data?.signedURL) return;
+        const fullSigned = data.signedURL.startsWith('http')
+          ? data.signedURL
+          : `${baseUrl}/storage/v1${data.signedURL.startsWith('/') ? '' : '/'}${data.signedURL}`;
+        setSignedUrl(fullSigned);
+      })
+      .catch(() => { clearTimeout(timeoutId); });
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [path, baseUrl, key, accessToken]);
 
   return (
     <Card className="group relative overflow-hidden hover:shadow-lg transition-all border-slate-200">
       <Link to={`/health?petId=${pet.id}`}>
         <div className="aspect-[16/10] bg-slate-100 overflow-hidden">
-          {signedUrl && !imgError ? (
+          {imageSrc && !imgError ? (
             <img 
-              src={signedUrl} 
+              key={pet.image_url ?? pet.id}
+              src={imageSrc} 
               alt={pet.name} 
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               onError={() => setImgError(true)}
