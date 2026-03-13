@@ -1,0 +1,20 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// This creates a "Post" table in your PostgreSQL database
+model Post {
+  id           String   @id @default(uuid())
+  authorName   String
+  authorAvatar String
+  title        String
+  imageUrl     String
+  likes        Int      @default(0)
+  type         String   @default("friend")
+  createdAt    DateTime @default(now())
+}
